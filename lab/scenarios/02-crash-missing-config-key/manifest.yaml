@@ -1,0 +1,40 @@
+# Scenario 1: CrashLoopBackOff because a required env var is missing.
+# The bug: the app needs DATABASE_URL, but the Deployment never sets it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: crash-missing-config-key
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkout-service
+  namespace: crash-missing-config-key
+data:
+  url: "http://localhost:5432/"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-service
+  namespace: crash-missing-config-key
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: checkout-service
+  template:
+    metadata:
+      labels:
+        app: checkout-service
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.36
+          command: ["sh", "-c", "echo started; sleep 3600"]
+          env:
+            - name: DATABASE_CRED
+              valueFrom:
+                configMapKeyRef:
+                  name: checkout-service
+                  key: user

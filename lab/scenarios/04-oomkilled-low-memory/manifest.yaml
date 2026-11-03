@@ -1,0 +1,38 @@
+# Scenario 4: OOMKilled because the memory limit is too low.
+# The bug: the app holds about 100 MB in memory, but its limit is only 32Mi.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: oomkilled-low-memory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-service
+  namespace: oomkilled-low-memory
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: checkout-service
+  template:
+    metadata:
+      labels:
+        app: checkout-service
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "loading product catalog into memory"
+              catalog=$(head -c 100m /dev/zero | tr '\0' 'x')
+              echo "catalog loaded"
+              sleep 3600
+          resources:
+            requests:
+              memory: 32Mi
+            limits:
+              memory: 32Mi

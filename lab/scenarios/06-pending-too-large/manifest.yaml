@@ -1,0 +1,30 @@
+# Scenario 6: Pending pod because no node is big enough.
+# The bug: the pod requests 1000 CPUs and 1Ti of memory.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pending-too-large
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-service
+  namespace: pending-too-large
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: checkout-service
+  template:
+    metadata:
+      labels:
+        app: checkout-service
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.36
+          command: ["sh", "-c", "echo started; sleep 3600"]
+          resources:
+            requests:
+              cpu: "1000"
+              memory: 1Ti

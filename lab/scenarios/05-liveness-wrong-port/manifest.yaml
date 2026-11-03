@@ -1,0 +1,42 @@
+# Scenario 5: restarts caused by a failing liveness probe.
+# The bug: the app listens on port 8080, but the probe checks port 9090.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: liveness-wrong-port
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-service
+  namespace: liveness-wrong-port
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: checkout-service
+  template:
+    metadata:
+      labels:
+        app: checkout-service
+    spec:
+      containers:
+        - name: app
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /www
+              echo ok > /www/index.html
+              echo "listening on port 8080"
+              exec httpd -f -p 8080 -h /www
+          ports:
+            - containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 9090
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 2
