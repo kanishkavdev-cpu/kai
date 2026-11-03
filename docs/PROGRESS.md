@@ -9,6 +9,20 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
 - The `go` line in `go.mod` sets the minimum version, not the compiler used, and dependencies can raise it
 - `package main` with `func main()` builds a program; any other package is a library
 - `main()` can't return an error, so failure is reported with `os.Exit(1)`
+- `go.sum` stores a checksum for every dependency; `go mod tidy` fills it in once my code imports a package, and removes `// indirect` from modules I import directly
+- An unused import or an unused variable is a compile error in Go, not a warning
+- Read compiler errors as `file:line:column: message`; `have (...)` / `want (...)` compares what I passed with what the function takes
+- A function's arguments and a struct's fields are different things: `NewDefaultClientConfigLoadingRules()` takes no arguments, and I set `ExplicitPath` on the struct it returns
+- Use keyed struct literals (`ConfigOverrides{CurrentContext: ctx}`); positional ones fill fields in order and must fill every field
+- `fmt.Errorf` only builds an error; I must `return` it, or the function carries on with broken values
+- Every `return` must give every value in the signature: on error return `nil` plus the error, and on success the value plus `nil`. The caller checks `err` first and never uses the other value when it isn't `nil`
+- `%w` wraps an error so the message keeps the real cause and `errors.Is` still works
+- An interface is a list of methods, and any type with those methods satisfies it. "Accept interfaces, return structs": `NewClient` returns `*kubernetes.Clientset`, and the functions that use it will take `kubernetes.Interface` so tests can pass a fake
+### Reading library source
+- Downloaded modules live at the exact `go.mod` version: `go list -m -f '{{.Dir}}' k8s.io/client-go`
+- Ways in: F12 (Go to Definition) and Ctrl+F12 (Go to Implementations) in VS Code, `go doc` and `go doc -src`, `grep -rn` in the module folder, pkg.go.dev
+- Start with one question, read the doc comment and then the code, go one level deep, check the tests and examples, and stop once I can point to the file and line that answers it
+- client-go ignores an empty `ExplicitPath` (`loader.go:208`), and `DeferredLoadingClientConfig.ClientConfig()` already falls back to in-cluster config when no kubeconfig is found (`merged_client_builder.go`)
 ### Agentic AI / Kubernetes
 - client-go versions map to Kubernetes versions (`v0.37.x` is Kubernetes 1.37), and all three `k8s.io` modules should stay on the same version
 - Always pass `--context` explicitly, because the current kubectl context may point at the wrong cluster
@@ -20,6 +34,8 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
 - `STATUS` in `kubectl get pods` is a snapshot that cycles (`Running` → `Error` → `CrashLoopBackOff`), so check restart count, Last State and events instead
 - A stuck rollout keeps old and new pods side by side, so a Deployment can have several pods at once
 - `Unknown` pod status means the kubelet hasn't reported yet, not that the app failed
+- Inside a pod, Kubernetes sets `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT` and mounts a service-account token at `/var/run/secrets/kubernetes.io/serviceaccount/token`; that's how client-go knows it's in-cluster
+- kai loads the kubeconfig first and falls back to in-cluster config, like kubectl; `--context` (empty means the current context) picks the cluster explicitly
 
 ## Open questions
 - Why does `kubectl logs --previous` sometimes return `unable to retrieve container logs`? (Seen on scenarios 1 and 4; a retry sometimes works)
