@@ -1,5 +1,5 @@
-# Scenario 1: CrashLoopBackOff because a required env var is missing.
-# The bug: the app needs DATABASE_URL, but the Deployment never sets it.
+# Scenario 3: ImagePullBackOff because there's a typo in the image tag
+# The bug: busybox:1.36-typo doesn't exist. The correct tag is busybox:1.36.
 apiVersion: v1
 kind: Namespace
 metadata:

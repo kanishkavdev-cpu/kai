@@ -20,6 +20,7 @@ lab:
 		kind create cluster --name $(CLUSTER) --config lab/kind.yaml; \
 	fi
 	kubectl --context $(CONTEXT) wait --for=condition=Ready nodes --all --timeout=120s
+	kubectl --context $(CONTEXT) apply --recursive -f lab/scenarios/
 
 lab-down:
 	kind delete cluster --name $(CLUSTER)

@@ -1,5 +1,5 @@
-# Scenario 1: CrashLoopBackOff because a required env var is missing.
-# The bug: the app needs DATABASE_URL, but the Deployment never sets it.
+# Scenario 2: CreateContainerConfigError because a ConfigMap key is missing.
+# The bug: the app needs username, but the ConfigMap doesn't have a user key.
 apiVersion: v1
 kind: Namespace
 metadata:

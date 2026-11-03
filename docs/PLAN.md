@@ -49,16 +49,17 @@ k8s-ai/
 **Goal:** a reproducible broken cluster, and Go code that can see what's wrong in it.
 
 - [x] `go mod init`, add cobra, client-go, a Makefile (`make test`, `make build`)
-- [ ] `lab/kind.yaml` and `make lab` to create and tear down the cluster
-- [ ] Write the 8 broken scenarios in `lab/scenarios/` (these become your eval set later):
-  - [ ] CrashLoopBackOff: app exits because of a missing env var
-  - [ ] CrashLoopBackOff: missing ConfigMap or Secret key
-  - [ ] ImagePullBackOff: typo in the image tag
-  - [ ] OOMKilled: memory limit too low
-  - [ ] Liveness probe failing: wrong port or path
-  - [ ] Pending pod: requests larger than any node can fit
-  - [ ] Pending PVC: nonexistent StorageClass
-  - [ ] Service with no endpoints: selector does not match pod labels
+- [x] `lab/kind.yaml` and `make lab` to create and tear down the cluster
+- [x] Write the 8 broken scenarios in `lab/scenarios/` (these become your eval set later):
+  - [x] CrashLoopBackOff: app exits because of a missing env var
+  - [x] CreateContainerConfigError: missing ConfigMap or Secret key (the container never starts, so it can't crash)
+  - [x] ImagePullBackOff: typo in the image tag
+  - [x] OOMKilled: memory limit too low
+  - [x] Liveness probe failing: wrong port or path
+  - [x] Pending pod: requests larger than any node can fit
+  - [x] Pending PVC: nonexistent StorageClass
+  - [x] Service with no endpoints: selector does not match pod labels
+- [x] `make lab` also applies all 8 scenarios (needed for the "Done when" check)
 - [ ] `internal/kube`: kubeconfig loading (in-cluster and local), then functions for
   - [ ] get pods, deployments, services, PVCs, ingresses, events
   - [ ] describe-equivalent summaries (status, conditions, container states, restart counts, last termination reason)

@@ -1,5 +1,5 @@
 # Scenario 6: Pending pod because no node is big enough.
-# The bug: the pod requests 1000 CPUs and 1Ti of memory.
+# The bug: the pod requests 64 CPUs and 1Ti of memory.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -26,5 +26,5 @@ spec:
           command: ["sh", "-c", "echo started; sleep 3600"]
           resources:
             requests:
-              cpu: "1000"
+              cpu: "64"
               memory: 1Ti
