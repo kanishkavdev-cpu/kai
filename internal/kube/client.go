@@ -13,9 +13,9 @@ type Options struct {
 	Context    string // "" mean the current context
 }
 
-// NewClient builds a Kubernetes client from the kubeconfig, falling back to
+// NewClientset builds a Kubernetes clientset from the kubeconfig, falling back to
 // in-cluster config when running inside a pod.
-func NewClient(opts Options) (*kubernetes.Clientset, error) {
+func NewClientset(opts Options) (*kubernetes.Clientset, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if opts.Kubeconfig != "" {
 		rules.ExplicitPath = opts.Kubeconfig
