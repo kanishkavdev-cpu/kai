@@ -18,6 +18,22 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
 - Every `return` must give every value in the signature: on error return `nil` plus the error, and on success the value plus `nil`. The caller checks `err` first and never uses the other value when it isn't `nil`
 - `%w` wraps an error so the message keeps the real cause and `errors.Is` still works
 - An interface is a list of methods, and any type with those methods satisfies it. "Accept interfaces, return structs": `NewClient` returns `*kubernetes.Clientset`, and the functions that use it will take `kubernetes.Interface` so tests can pass a fake
+- Every package is named by the last part of its path, so four `.../v1` imports clash; give each an alias like `corev1 "k8s.io/api/core/v1"`
+- A package never imports itself: code in the same package already sees everything, so call `New(...)`, not `kube.New(...)`. Go forbids import cycles
+- In a method `func (c *Client) ...`, `c` is the receiver, the value the method was called on, and it already holds what the method needs (`c.cs`)
+- Create the client once at the edge of the program (`main`) and pass it in (dependency injection), so `--context` is respected and tests can pass a fake
+- Uppercase names are exported (usable from other packages), lowercase names are private: `New` and `String()` are public, the `cs` field is not
+- Go makes me receive every return value: `sel, err := ...`, not `sel := ...`
+- `:=` needs at least one new variable on the left; otherwise it reuses the existing ones, which can overwrite a parameter by accident
+- Count the `%` verbs: each one takes exactly one value, in order. Format strings hold the fixed words, and values that change go in the `%s` slots
+- Error messages start lowercase and name the step that failed, because they get joined (`get context: list pods for deployment ns/name: ...`)
+- After a syntax error, fix only the first error and rebuild; the rest are usually caused by it
+- Empty braces (`metav1.ListOptions{}`) give every field its zero value, which means "no filter"
+- `go.mod` marks a module direct once my code imports it; `k8s.io/api` and `apimachinery` lost `// indirect` when `resources.go` imported them
+- Short, general names (`list`, `err`) suit short scopes; use the same name for the same role in every function
+- Duplication is only a problem when the same *decision* is copied, so one change must be made in many places. My four `List` functions look alike but each calls a different API and returns a different type, so they stay separate ("a little copying is better than a little dependency")
+- Generics (`func f[T any](...)`) could merge them, but a type parameter can't read a field like `.Items`, so each caller would still need an adapter. The merged code would be longer and harder to read. Generics pay off when the shared logic is substantial (sorting, filtering, retries)
+- Rule of three: wait until the same logic appears three times and is clearly the same before abstracting. If every `List` later needs the same retry and RBAC handling (Day 6), that shared code is worth a helper
 ### Reading library source
 - Downloaded modules live at the exact `go.mod` version: `go list -m -f '{{.Dir}}' k8s.io/client-go`
 - Ways in: F12 (Go to Definition) and Ctrl+F12 (Go to Implementations) in VS Code, `go doc` and `go doc -src`, `grep -rn` in the module folder, pkg.go.dev
@@ -36,6 +52,11 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
 - `Unknown` pod status means the kubelet hasn't reported yet, not that the app failed
 - Inside a pod, Kubernetes sets `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT` and mounts a service-account token at `/var/run/secrets/kubernetes.io/serviceaccount/token`; that's how client-go knows it's in-cluster
 - kai loads the kubeconfig first and falls back to in-cluster config, like kubectl; `--context` (empty means the current context) picks the cluster explicitly
+- A Deployment doesn't list its pods; its `Spec.Selector` says which labels they carry, and `metav1.LabelSelectorAsSelector(...).String()` turns it into `app=checkout-service` for `ListOptions.LabelSelector`
+- A Service's selector points at pods, not the other way round, so kai lists all Services in the namespace and checks which should match
+- A pod's phase is coarse: a crashlooping pod still shows `phase=Running`. The real reason is in the container statuses
+- For a missing namespace, the API server just says the object is `not found`, so kai's error prefix (`ns/name`) is what shows where it looked
+- API groups match the YAML `apiVersion`: Pods, Services, PVCs and Events are `CoreV1()` (`v1`), Deployments are `AppsV1()` (`apps/v1`), Ingresses are `NetworkingV1()` (`networking.k8s.io/v1`)
 
 ## Open questions
 - Why does `kubectl logs --previous` sometimes return `unable to retrieve container logs`? (Seen on scenarios 1 and 4; a retry sometimes works)
@@ -110,6 +131,34 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
 - `logs --previous` can fail, so treat it as "no logs available", not a fatal error.
 - A Deployment can have several pods at once (stuck rollout), so don't only read the first pod.
 - Some causes live on related objects: the PVC (scenario 7) or a Service whose selector should match (scenario 8).
+
+### Task: `internal/kube`: kubeconfig loading, and get pods, deployments, services, PVCs, ingresses, events
+*(Drafted by Claude at my request. I wrote the functions; Claude fixed the import aliases, the self-import and the `GetDeployment` body when I asked, and renamed the `list` variables.)*
+- **What I built:**
+  - `internal/kube/client.go`: the `Options` struct (`Kubeconfig`, `Context`) and `NewClientset(opts)`, which returns a `*kubernetes.Clientset`.
+  - `internal/kube/resources.go`: the `Client` struct holding a `kubernetes.Interface`, `New(cs)`, `GetDeployment`, `ListPodsForDeployment`, `ListServices`, `ListPVCs`, `ListIngresses` and `ListEvents`.
+- **How it works:** `NewClientset` builds loading rules (with `ExplicitPath` set only if a path was given) and overrides (with `CurrentContext`), and client-go reads the kubeconfig or falls back to in-cluster config. `New` wraps that clientset, or a fake one in tests, in a `Client`, and every method reaches the API through `c.cs`. `ListPodsForDeployment` turns the Deployment's `Spec.Selector` into a string such as `app=checkout-service` and lists only the pods with those labels, so a stuck rollout returns all of its pods. Every method takes `ctx` first, wraps errors with the namespace and name, and returns `.Items` from the list.
+- **Go concepts used:** packages and import aliases, structs and methods with a receiver, interfaces ("accept interfaces, return structs"), keyed struct literals, multiple return values, error wrapping with `%w`, exported vs unexported names, `context.Context`.
+- **Agent concepts used:** these functions are kai's read-only view of the cluster. Tested against `kai-lab`, they already return the root-cause evidence for scenario 3 (image pull events), 7 (PVC asks for `fast-ssd`) and 8 (Service selects `app=checkout`).
+- **Problems I hit and how I solved them:**
+  - `missing go.sum entry` errors everywhere: nothing had imported client-go before, so `go.sum` had no checksums for its dependencies. `go mod tidy` fixed it.
+  - `too many arguments` for `NewDefaultClientConfigLoadingRules(path)`: it takes no arguments, and `ExplicitPath` is a field I set on the struct it returns.
+  - `cannot use opts.Context as api.AuthInfo`: a positional struct literal filled the first field. A keyed literal (`CurrentContext: opts.Context`) fixed it.
+  - `fmt.Errorf` without `return`: the error was built and thrown away.
+  - `v1 redeclared`: four packages are all named `v1`, so each import needs an alias (`appsv1`, `corev1`, `networkingv1`, `metav1`).
+  - `import cycle not allowed`: I put the caller's code (`kube.NewClientset`, `kube.New`) inside a method. Inside the package, the client is already available as `c.cs`.
+  - Reusing `d` for the selector overwrote the Deployment; a new variable `sel` fixed it.
+  - `assignment mismatch: 1 variable but ... returns 2 values`: Go makes me take every return value, including the error.
+  - `sel.string()` vs `String()`: lowercase names are private, so the method is `String()`.
+  - `fmt.Errorf call has arguments but no formatting directives` (from `go vet`): each `%` verb needs exactly one value.
+  - A syntax error in `ListOptions{ListServices: }` produced 11 errors; only the first one was real.
+  - The file looked unchanged because I hadn't saved it in VS Code.
+- **Review feedback I applied:**
+  - Renamed `NewClient` to `NewClientset` so it doesn't clash with `New`.
+  - Each error message names the step that failed (`parse selector` vs `list pods`) and uses `ns/name` with `%s/%s`.
+  - Removed a hard-coded namespace from a format string.
+  - Lowercase error messages, no trailing spaces, gofmt clean.
+  - Named every list variable `list`, so all five functions read the same.
 
 **Day summary**
 - "Done when" result:

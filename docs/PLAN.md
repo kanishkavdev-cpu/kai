@@ -60,8 +60,8 @@ k8s-ai/
   - [x] Pending PVC: nonexistent StorageClass
   - [x] Service with no endpoints: selector does not match pod labels
 - [x] `make lab` also applies all 8 scenarios (needed for the "Done when" check)
-- [ ] `internal/kube`: kubeconfig loading (in-cluster and local), then functions for
-  - [ ] get pods, deployments, services, PVCs, ingresses, events
+- [x] `internal/kube`: kubeconfig loading (in-cluster and local), then functions for
+  - [x] get pods, deployments, services, PVCs, ingresses, events
   - [ ] describe-equivalent summaries (status, conditions, container states, restart counts, last termination reason)
   - [ ] logs, including `--previous` for crashed containers, with a line cap
   - [ ] events filtered by involved object, sorted newest first
