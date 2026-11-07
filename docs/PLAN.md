@@ -62,10 +62,10 @@ k8s-ai/
 - [x] `make lab` also applies all 8 scenarios (needed for the "Done when" check)
 - [x] `internal/kube`: kubeconfig loading (in-cluster and local), then functions for
   - [x] get pods, deployments, services, PVCs, ingresses, events
-  - [ ] describe-equivalent summaries (status, conditions, container states, restart counts, last termination reason)
-  - [ ] logs, including `--previous` for crashed containers, with a line cap
-  - [ ] events filtered by involved object, sorted newest first
-- [ ] `kai get-context deploy/<name>` dumps all of the above as JSON
+  - [x] describe-equivalent summaries (status, conditions, container states, restart counts, last termination reason)
+  - [x] logs, including `--previous` for crashed containers, with a line cap
+  - [x] events filtered by involved object, sorted newest first
+- [x] `kai get-context deploy/<name>` dumps all of the above as JSON
 
 **Done when:** `make lab` brings up all 8 broken workloads, and `kai get-context` shows the real failure reason for each one, all without an LLM.
 

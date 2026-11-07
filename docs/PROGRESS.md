@@ -31,6 +31,14 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
 - Empty braces (`metav1.ListOptions{}`) give every field its zero value, which means "no filter"
 - `go.mod` marks a module direct once my code imports it; `k8s.io/api` and `apimachinery` lost `// indirect` when `resources.go` imported them
 - Short, general names (`list`, `err`) suit short scopes; use the same name for the same role in every function
+- A pure function (no API calls, no `ctx`, no `error`) like `SummarizePod` is the easiest kind of code to test: build the input by hand and compare the output
+- A pointer field means "may be absent": `LastTermination *StateSummary` is nil when the container never terminated, which a plain struct can't express
+- JSON struct tags (`json:"restart_count,omitempty"`) set the field names in the output; `omitempty` drops empty fields so the JSON stays short
+- Struct embedding (`PodContext` contains `PodSummary` with no field name) promotes the inner fields, and `encoding/json` flattens them into one object
+- A sentinel error (`var ErrLogsUnavailable = errors.New(...)`) wrapped with `%w` lets callers check `errors.Is(err, kube.ErrLogsUnavailable)`
+- `context.WithTimeout` puts a deadline on every API call made with that ctx; `signal.NotifyContext` cancels it on Ctrl+C
+- Write data to stdout and messages to stderr, so `kai get-context ... | jq` gets pure JSON
+- Table-driven tests: a slice of cases, one `t.Run` each. `fake.NewClientset(objects...)` gives an in-memory cluster for tests
 - Duplication is only a problem when the same *decision* is copied, so one change must be made in many places. My four `List` functions look alike but each calls a different API and returns a different type, so they stay separate ("a little copying is better than a little dependency")
 - Generics (`func f[T any](...)`) could merge them, but a type parameter can't read a field like `.Items`, so each caller would still need an adapter. The merged code would be longer and harder to read. Generics pay off when the shared logic is substantial (sorting, filtering, retries)
 - Rule of three: wait until the same logic appears three times and is clearly the same before abstracting. If every `List` later needs the same retry and RBAC handling (Day 6), that shared code is worth a helper
@@ -39,6 +47,19 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
 - Ways in: F12 (Go to Definition) and Ctrl+F12 (Go to Implementations) in VS Code, `go doc` and `go doc -src`, `grep -rn` in the module folder, pkg.go.dev
 - Start with one question, read the doc comment and then the code, go one level deep, check the tests and examples, and stop once I can point to the file and line that answers it
 - client-go ignores an empty `ExplicitPath` (`loader.go:208`), and `DeferredLoadingClientConfig.ClientConfig()` already falls back to in-cluster config when no kubeconfig is found (`merged_client_builder.go`)
+### Interview notes (things worth being able to explain)
+- **"Walk me through kai's architecture."** Day 1 is the read-only data layer: `NewClientset` (kubeconfig or in-cluster) → `kube.Client` wrapping a `kubernetes.Interface` → small functions that each fetch one thing → `GetContext` that combines them into one JSON document. The analyzers and the agent sit on top of it and never call client-go directly.
+- **"Why `kubernetes.Interface` and not `*Clientset`?"** "Accept interfaces, return structs": the constructor returns the concrete type, and everything that uses it takes the interface, so tests pass `fake.NewClientset(...)` and need no cluster.
+- **"How do you avoid talking to the wrong cluster?"** `--context` on every command, the same loader for the client and the printed context, and kai prints `context X, namespace Y` before doing anything. I saw the danger myself: my current context switched to `kind-kai` without me noticing.
+- **"Why summaries instead of the raw objects?"** A pod object has hundreds of fields. The phase says `Running` for a crashlooping pod; the cause is in `lastState.terminated` (exit 137 = OOMKilled), events or logs. Summaries keep the evidence and cut the tokens an LLM would spend.
+- **"How do you handle a nil pointer in Kubernetes types?"** `ContainerState` has three pointers and only one is set; `LastTerminationState.Terminated` is nil if the container never ran (CreateContainerConfigError). Check every pointer before reading it, and use a pointer in my own struct (`LastTermination *StateSummary`) so "never terminated" is different from "exited 0".
+- **"What happens when part of the data can't be read?"** Fail on what makes the answer meaningless (the Deployment doesn't exist); record everything else in `errors` and keep going. Logs that can't be read become `previous_error`, not a crash.
+- **"Why cap logs?"** One chatty container could produce megabytes. Both lines (`TailLines`) and bytes (`LimitBytes`) are capped on the server side, so the data never even crosses the network.
+- **"Tell me about a tricky bug."** `kubectl logs --previous` sometimes returned "unable to retrieve container logs" as the log text with HTTP success. It happens right after a crash, when "previous" points to a container the kubelet already deleted. I turned it into a sentinel error (`ErrLogsUnavailable`) callers can check with `errors.Is`.
+- **"Why server-side filtering?"** Label selectors (pods of a Deployment) and field selectors (events for one object) make the API server do the filtering, so kai doesn't download a whole namespace. The fake clientset ignores field selectors, so the code double-checks in Go, and that's covered by a test.
+- **"Why not merge the four List functions with generics?"** They look alike but call different APIs and return different types; a type parameter can't read `.Items`, so a generic version would be longer and harder to read. Rule of three, and "a little copying is better than a little dependency".
+- **"Why deterministic data collection before the LLM?"** It's cheap, testable, and repeatable. Seven of the eight scenarios are fully explained by one field or one event, with no model at all. The LLM is for explaining and for the ambiguous cases.
+
 ### Agentic AI / Kubernetes
 - client-go versions map to Kubernetes versions (`v0.37.x` is Kubernetes 1.37), and all three `k8s.io` modules should stay on the same version
 - Always pass `--context` explicitly, because the current kubectl context may point at the wrong cluster
@@ -56,15 +77,22 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
 - A Service's selector points at pods, not the other way round, so kai lists all Services in the namespace and checks which should match
 - A pod's phase is coarse: a crashlooping pod still shows `phase=Running`. The real reason is in the container statuses
 - For a missing namespace, the API server just says the object is `not found`, so kai's error prefix (`ns/name`) is what shows where it looked
+- Field selectors filter on fields, not labels: `involvedObject.kind=Pod,involvedObject.name=...` returns only one object's events
+- Events have several timestamp fields, filled in differently by different components (`series.lastObservedTime`, `lastTimestamp`, `eventTime`, `firstTimestamp`), so pick the first one that is set
+- The same failure is often recorded as many separate Event objects; merge them by type, reason, message and object, and add up the counts
+- Each scenario's evidence lives in a different place: logs (1), events (2, 3, 5, 6), last termination plus the memory limit (4), the probe port vs the container port (5), the PVC's events (7), and the Service selector vs pod labels (8)
 - API groups match the YAML `apiVersion`: Pods, Services, PVCs and Events are `CoreV1()` (`v1`), Deployments are `AppsV1()` (`apps/v1`), Ingresses are `NetworkingV1()` (`networking.k8s.io/v1`)
 
 ## Open questions
-- Why does `kubectl logs --previous` sometimes return `unable to retrieve container logs`? (Seen on scenarios 1 and 4; a retry sometimes works)
+- *(none right now)*
+
+### Answered
+- **Why does `kubectl logs --previous` sometimes return `unable to retrieve container logs`?** For a crashlooping container, "previous" means the run before the current one. Right after a crash, the *current* container is the one that just died, so "previous" points to the run before that, which the kubelet has already deleted (it keeps only the most recent dead container). A moment later the container is `waiting` again and "previous" is the run that just crashed, so a retry works. The kubelet sends the message as log text with a success status, not as an error, so kai checks for it and returns `ErrLogsUnavailable`.
 
 ---
 
 ## Day 1: Lab cluster and read-only Kubernetes access
-**Status:** in progress
+**Status:** done
 
 <!-- Add one entry per task:
 ### Task: <task name from PLAN.md>
@@ -160,11 +188,48 @@ What I built, how I built it, and what I learned. One entry per task, plus a sum
   - Lowercase error messages, no trailing spaces, gofmt clean.
   - Named every list variable `list`, so all five functions read the same.
 
+### Task: describe-equivalent summaries, logs, events for one object, and `kai get-context`
+*(Written by Claude at my request at the end of the day, to finish Day 1. I need to read through this code before Day 2 so I can explain it.)*
+- **What I built:**
+  - `internal/kube/summary.go`: `PodSummary`, `ContainerSummary`, `StateSummary`, `ConditionSummary`, `SummarizePod` and `summarizeState`.
+  - `internal/kube/logs.go`: `GetLogs` (current or `--previous`, capped at 50 lines and 16 KB) and the sentinel error `ErrLogsUnavailable`.
+  - `internal/kube/events.go`: `ListEventsFor(kind, name)`, which filters with a field selector, sorts newest first and merges duplicates.
+  - `internal/kube/context.go`: `GetContext`, which builds a `DeploymentContext`: the Deployment (replicas, conditions, container spec with resources, ports, probes and ConfigMap/Secret references, events), each pod (summary, events, logs), Services (with `selects_deployment_pods`), the PVCs the pods mount (with their events) and Ingresses.
+  - `internal/kube/client.go`: `ResolveTarget` returns the context name and default namespace; a shared `loader` keeps it in step with `NewClientset`.
+  - `cmd/kai/main.go`: global flags `--context`, `--kubeconfig`, `-n`; Ctrl+C cancels the context.
+  - `cmd/kai/getcontext.go`: `kai get-context deploy/<name>` with `--log-lines` and `--timeout`.
+  - Tests: `summary_test.go`, `context_test.go` (fake clientset), `getcontext_test.go`.
+- **How it works:** `get-context` parses `deploy/<name>`, prints the context and namespace to stderr, builds the client, and calls `GetContext` with a 30-second timeout. Only a missing Deployment is fatal; any other part that fails goes into `errors` and the rest is still printed. `SummarizePod` is a pure function that doesn't call the API, so it's tested with hand-built pods. Every pointer (`Waiting`, `Running`, `Terminated`, `LastTerminationState.Terminated`, probes) is checked before it's read. The JSON goes to stdout and the context line to stderr, so the output can be piped to `jq`.
+- **Go concepts used:** struct design with JSON tags and `omitempty`, pointer fields meaning "may be absent", nil checks, `switch` with no condition, `for ... range` and `append`, struct embedding (`PodContext` embeds `PodSummary`), closures (`addErr`), maps as set keys (`mergeDuplicateEvents`), `slices.SortStableFunc`, sentinel errors with `errors.New` and `%w`, `context.WithTimeout`, `signal.NotifyContext`, cobra subcommands and persistent flags, table-driven tests and `client-go/kubernetes/fake`.
+- **Agent concepts used:** this JSON is what the analyzers (Day 2) and the model (Day 3) will read. Summaries keep only the evidence and drop the noise, logs are capped by lines and bytes, and duplicate events are merged, because every extra byte costs tokens and can bury the real cause. Partial failures are reported, not fatal, so the agent still gets what could be read (this matters with RBAC on Day 4).
+- **Problems hit and how they were solved:**
+  - The same event appeared up to 9 times (PVC `ProvisioningFailed`). These are separate Event objects with the same text, so `mergeDuplicateEvents` folds them into one and adds up the counts (562 in total).
+  - Scenario 1's previous log came back as the text `unable to retrieve container logs ...`. The kubelet returns this with a success status. `GetLogs` now turns it into `ErrLogsUnavailable` (see "Answered" above).
+  - The fake clientset ignores field selectors, so `ListEventsFor` also checks `InvolvedObject` in Go.
+  - A test expected timestamps rounded to seconds, but the fake keeps full precision (only the real API server rounds).
+  - `golangci-lint` (errcheck) flagged an unchecked `fmt.Fprintf`; switched to cobra's `cmd.PrintErrf`.
+- **Review feedback applied:** none yet. I'll review this code myself before Day 2.
+
 **Day summary**
-- "Done when" result:
-- What I learned:
-- Still unclear:
+- "Done when" result: **passed.** `make lab` reported every scenario `unchanged` (all 8 were already running), and `kai get-context deploy/checkout-service -n <scenario> --context kind-kai-lab` shows the real failure reason for each one, without an LLM:
+  ```
+  crash-missing-env          FATAL: DATABASE_URL is not set                         (previous log)
+  crash-missing-config-key   Error: couldn't find key user in ConfigMap crash-missing-config-key/checkout-service
+  imagepull-bad-tag          Failed to pull image "busybox:1.36-typo": rpc error: code = NotFound
+  oomkilled-low-memory       OOMKilled exit 137, limit 32Mi                         (last_termination + spec)
+  liveness-wrong-port        Liveness probe failed: Get "http://10.244.0.7:9090/" ... (spec: probe :9090, port 8080)
+  pending-too-large          0/1 nodes are available: 1 Insufficient cpu, 1 Insufficient memory
+  pvc-missing-storageclass   storageclass.storage.k8s.io "fast-ssd" not found         (PVC event)
+  service-selector-mismatch  service selector {app: checkout} selects_deployment_pods=false
+  ```
+  `go vet`, `golangci-lint` (0 issues) and `go test ./...` (8 tests in `internal/kube`, 1 table test in `cmd/kai`) all pass.
+- What I learned: see "Concepts I've learned" and "Interview notes" above. The biggest lesson: each failure leaves its evidence somewhere different (logs, events, last termination, the spec, a related PVC or Service), so a troubleshooting tool has to collect all of it.
+- Still unclear: I didn't write the last part of Day 1 myself (summaries, logs, events, `get-context`). I need to read `summary.go`, `events.go`, `logs.go` and `context.go` and be able to explain them.
 - Scope cuts:
+  - Init containers and ReplicaSet events aren't collected yet.
+  - EndpointSlices aren't read; `selects_deployment_pods` is computed from labels instead.
+  - The default namespace comes from the kubeconfig context; there's no `--all-namespaces`.
+  - No unit test for `ErrLogsUnavailable`, because the fake clientset always returns `fake logs`.
 
 ---
 
