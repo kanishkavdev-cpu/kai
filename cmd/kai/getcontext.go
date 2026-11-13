@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/KanishkaVerma054/kai/internal/kube"
+	"github.com/KanishkaVerma054/k8s-ai/internal/kube"
 )
 
 func newGetContextCmd(root *rootOptions) *cobra.Command {
